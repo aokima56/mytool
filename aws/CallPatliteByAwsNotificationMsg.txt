@@ -1,0 +1,153 @@
+Declare PtrSafe Sub Sleep Lib "kernel32" (ByVal dwMilliseconds As Long)
+
+Dim item As Outlook.MailItem
+Set item = ActiveInspector.CurrentItem.Body
+
+patliteAWS (item)
+
+
+End Sub
+Sub patliteAWS(item As Outlook.MailItem)
+ On Error GoTo ErrorHandler
+    
+    
+    'メール本文のJSONの値によりパトライトを発呼する
+    If ExstractJson(item) = 1 Or 2 Then
+        'すでに判明しているスルーしてよい。MFAに関するメールはスルー
+        Exit Sub
+    End If
+    
+    GoTo ErrorHandler
+    
+
+ErrorHandler:
+'正常処理でも必ず通る。
+'想定外のメールが着信した場合にエラーになったものも、オペレータに確認してもらう
+
+    'パトライト発呼シーケンスに入る
+    Dim WSH As Object, wExec As Object, Cmd As String, Result As String
+    Set WSH = CreateObject("Wscript.Shell")
+    
+    '実行コマンド指定（リテラルで・・・）
+    Cmd = "C:\aws\cmd\pat.cmd"
+    
+    'コマンド実行
+    Set wExec = WSH.Exec("%ComSpec% /c " & Cmd)
+    Do While wExec.Status = 0
+        DoEvents
+    Loop
+    
+    Sleep 3000
+    
+    'Set wExec = Nothing
+    'Set WSH = Nothing
+    
+    
+    
+    
+    '正常終了
+    GoTo Finally
+    
+    
+Finally:
+    Set wExec = Nothing
+    Set WSH = Nothing
+    
+    Set objHTTP = Nothing
+    Set objExcel = Nothing
+
+End Sub
+
+Function ParseJson(str) As Object
+
+'Jsonをデシリアライズ
+
+  Dim scriptControl: Set scriptControl = CreateObject("ScriptControl")
+  scriptControl.Language = "JScript"
+  scriptControl.AddCode "function Parse(str) { return eval('(' + str + ')'); };"
+  Dim json: Set json = scriptControl.CodeObject.Parse(str)
+
+  Set ParseJson = json
+  
+End Function
+
+
+Function ExstractJson(item As Outlook.MailItem) As Integer
+
+
+'Mail（AWS Notification Messages）本文からJSONを抽出し、
+'指定項目の値を取得し、値の内容に応じてReturnする
+
+'Return
+'0:除外対象ではない
+'1:除外対象 1.14のパターン
+'2:除外対象 IAM.6のパターン
+
+Dim strMailSubject As String
+Dim strMailBody As String
+
+strMailSubject = item.Subject
+'strMailBody = Item.Body
+
+'メール本文からLFを除去（1行にする）
+'AWSのメールはCRLFではなくLF
+'で、--より前を取得（JSON部分のみにする）
+
+
+'これでやりたい
+'strMailBody = Split(Replace(item.Body, vbLf, " "), "--")(0)
+
+
+
+
+
+'①メール本文からCRLFとLFを除去（1行にする）
+strMailBody = Replace(item.Body, vbLf, " ")
+
+'debug vbcrlfも削除してみる　→　成功　やはり変なCRLFをOutlookが認識している。Excelとの違い。要以下の処理。
+strMailBody = Replace(item.Body, vbCrLf, " ")
+
+
+
+'②"--"の位置を特定
+Dim intIchi As Integer
+intIchi = InStr(strMailBody, "--")
+
+strMailBody = Split(strMailBody, "--")(0)
+
+'debug print
+Dim intIchi2 As Integer
+intIchi2 = InStr(strMailBody, "--")
+
+
+'MsgBox (strMailBody)
+
+'JsonをParseする
+Dim json1 As Object: Set json1 = ParseJson(strMailBody)
+
+'AWS Notification MessagesのJSONの定義に従い、URLを取得する(VBAではネストされたJSONやさらに配列化されている項目に直接アクセスできない)
+Dim strMsg1 As String: strMsg1 = CallByName(CallByName(CallByName(CallByName(CallByName(CallByName(json1, "detail", VbGet), "findings", VbGet), 0, VbGet), "Remediation", VbGet), "Recommendation", VbGet), "Url", VbGet)
+
+
+
+'判定する
+If (InStr(strMsg1, "1.14")) <> 0 Then
+    
+    'MsgBox ("1.14だったよ")
+    ExstractJson = 1
+
+ElseIf InStr(strMsg1, "IAM.6") <> 0 Then
+
+    'MsgBox ("IMA.6だったよ")
+    ExstractJson = 2
+
+Else
+
+    'MsgBox ("ぱとらいと発呼！！")
+    ExstractJson = 0
+
+End If
+
+
+
+End Function
